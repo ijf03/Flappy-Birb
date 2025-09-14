@@ -24,6 +24,10 @@ import {
     scan,
     switchMap,
     take,
+    animationFrames,
+    merge,
+    pairwise,
+    pipe,
 } from "rxjs";
 import { fromFetch } from "rxjs/fetch";
 
@@ -43,7 +47,12 @@ const BIRB_X = Viewport.CANVAS_WIDTH*0.3 - Birb.WIDTH/2;
 
 const Constants = {
     PIPE_WIDTH: 50,
-    TICK_RATE_MS: 500, // Might need to change this!
+    GRAVITY_RATE: 0.001,
+    FLAP_RATE: 0.30,
+    MAX_UP: 0.60,
+    MAX_DOWN: 0.55,
+    MAX_FRAMES: 33,
+    PIPE_SPEED: 120,
 } as const;
 
 // User input
@@ -52,14 +61,168 @@ type Key = "Space";
 
 // State processing
 
-type State = Readonly<{
-    gameEnd: boolean;
+type BirbState = Readonly <{
+    y: number;
+    vy: number;
 }>;
 
-const initialState: State = {
-    gameEnd: false,
-};
+type Action =
+    | {type:"FLAP"}
+    | {type:"TICK"; dt: number}
 
+type Lives = Readonly<{
+    at: number;
+    gapY: number;
+    gapHeight: number;
+}>;
+
+type Pipe = Readonly<{
+    id: number;
+    x: number;
+    gapY: number;
+    gapHeight: number;
+    passed: boolean;
+}>;
+
+type State = Readonly<{
+    gameEnd: boolean;
+    time: number;
+    birb: BirbState;
+    pipes: ReadonlyArray<Pipe>;
+    remainingLives: ReadonlyArray<Lives>;
+}>;
+
+const clamp =(
+    x:number,
+    low:number,
+    high:number
+) => Math.max(low, Math.min(high,x));
+
+const clamp02 = (x:number) => Math.max(0, Math.min(1,x));
+
+const GapTop = (p:Pipe) =>
+    p.gapY*Viewport.CANVAS_HEIGHT - (p.gapHeight*Viewport.CANVAS_HEIGHT)/2;
+
+const GapBottom = (p:Pipe) =>
+    p.gapY*Viewport.CANVAS_HEIGHT + (p.gapHeight*Viewport.CANVAS_HEIGHT)/2;
+
+const nextPipe=(pipes:ReadonlyArray<Pipe>) =>
+    pipes.reduce((acc, p) => Math.max(acc, p.id), -1)+1;
+
+const makeInitialBirb=(): BirbState=> ({
+    y: Viewport.CANVAS_HEIGHT / 2 - Birb.HEIGHT/2,
+    vy:0,
+});
+
+const initialState = (lives: Lives[]): State => {
+    const seedGapY = lives[0]?.gapY ?? 0.5;
+    const seedGapHeight = lives[0]?.gapHeight ?? 0.25;
+
+    const seed: Pipe = {
+        id: 0,
+        x: Viewport.CANVAS_WIDTH - Constants.PIPE_WIDTH,
+        gapY: seedGapY,
+        gapHeight: seedGapHeight,
+        passed: false,
+    };
+
+    return {
+        gameEnd: false,
+        time: 0,
+        birb: makeInitialBirb(),
+        pipes: [seed],
+        remainingLives:lives.slice(),
+    };
+};
+function parseCSV (csv: string): Lives[] {
+    const lines = csv.trim().split(/\r?\n/).filter(l => l.trim().length > 0);
+    const headerLine = lines.shift() ?? "";
+    const header = headerLine.split(",").map(s => s.trim());
+    const gapYIdx = header.findIndex(h => h === "gap_y");
+    const gapHeightIdx = header.findIndex(h => h === "gap_height");
+    const timeIdx = header.findIndex(h => h === "time");
+
+    const toNum = (s:string, def:number) => {
+        const n = Number(s);
+        return isNaN(n) ? def : n;
+    };
+
+    const clamp02 = (x:number) => Math.max(0, Math.min(1,x));
+
+    const lives = lines.map(line => {
+        const cols = line.split(",").map(s => s.trim());
+        const gapY = clamp02(toNum(cols[gapYIdx], 0.5));
+        const gapHeight = clamp02(toNum(cols[gapHeightIdx], 0.25));
+        const at = Math.max(0, Math.round(toNum(cols[timeIdx], 0)*1000));
+        return { at, gapY, gapHeight} as Lives;
+    });
+
+    return lives.sort((a,b) => a.at - b.at);
+}
+
+function reduceState(s:State, a:Action): State{
+    switch(a.type) {
+        case "FLAP": {
+            const velocityY=-Math.min(
+                Constants.FLAP_RATE,
+                Constants.MAX_UP
+            );
+            return{ ...s, birb: {...s.birb, vy:velocityY}}
+        }
+        case "TICK": {
+            const dt = clamp(a.dt, 0, Constants.MAX_FRAMES);
+            const time = s.time + dt;
+
+            let remaining = s.remainingLives.slice();
+            let pipes = s.pipes.slice();
+
+            while (remaining.length > 0 && time >= remaining[0].at) {
+                const sp = remaining[0];
+                remaining = remaining.slice(1);
+                pipes.push({
+                    id: nextPipe(pipes),
+                    x: Viewport.CANVAS_WIDTH,
+                    gapY: sp.gapY,
+                    gapHeight: sp.gapHeight,
+                    passed: false,
+                });
+            }
+
+            const sec = dt / 1000;
+            pipes = pipes
+                .map(
+                    p => ({
+                        ...p,
+                        x: p.x-Constants.PIPE_SPEED*sec
+                    })
+                )
+                .filter(p => p.x + Constants.PIPE_WIDTH>0);
+
+
+            const vy_orig = s.birb.vy + Constants.GRAVITY_RATE*dt;
+            const vy = clamp(
+                vy_orig,
+                -Constants.MAX_UP,
+                Constants.MAX_DOWN
+            );
+            const y = clamp(
+                s.birb.y + vy*dt,
+                0,
+                Viewport.CANVAS_HEIGHT - Birb.HEIGHT
+            );
+
+            return {
+                ...s,
+                time,
+                birb: { y, vy },
+                pipes,
+                remainingLives: remaining,
+            };
+        }
+        default:
+            return s;
+    }
+}
 /**
  * Updates the state by proceeding with one time step.
  *
@@ -117,13 +280,6 @@ const createSvgElement = (
 };
 
 const render = (): ((s: State) => void) => {
-    // Canvas elements
-    const gameOver = document.querySelector("#gameOver") as SVGElement;
-    const container = document.querySelector("#main") as HTMLElement;
-
-    // Text fields
-    const livesText = document.querySelector("#livesText") as HTMLElement;
-    const scoreText = document.querySelector("#scoreText") as HTMLElement;
 
     const svg = document.querySelector("#svgCanvas") as SVGSVGElement;
 
@@ -145,6 +301,8 @@ const render = (): ((s: State) => void) => {
         }) as SVGElement;
         svg.appendChild(birbImg);
     }
+
+    const pipeNodes = new Map<number, SVGGElement>();
     /**
      * Renders the current state to the canvas.
      *
@@ -154,53 +312,75 @@ const render = (): ((s: State) => void) => {
      */
     return (s: State) => {
         // Add birb to the main grid canvas
-        const birdImg = createSvgElement(svg.namespaceURI, "image", {
-            href: "assets/birb.png",
-            x: `${Viewport.CANVAS_WIDTH * 0.3 - Birb.WIDTH / 2}`,
-            y: `${Viewport.CANVAS_HEIGHT / 2 - Birb.HEIGHT / 2}`,
-            width: `${Birb.WIDTH}`,
-            height: `${Birb.HEIGHT}`,
-        });
-        svg.appendChild(birdImg);
 
-        // Draw a static pipe as a demonstration
-        const pipeGapY = 200; // vertical center of the gap
-        const pipeGapHeight = 100;
+        birbImg.setAttribute("y", `${s.birb.y}`);
+        birbImg.setAttribute("x", `${BIRB_X}`);
 
-        // Top pipe
-        const pipeTop = createSvgElement(svg.namespaceURI, "rect", {
-            x: "150",
-            y: "0",
-            width: `${Constants.PIPE_WIDTH}`,
-            height: `${pipeGapY - pipeGapHeight / 2}`,
-            fill: "green",
-        });
+        const current = new Set<number>();
 
-        // Bottom pipe
-        const pipeBottom = createSvgElement(svg.namespaceURI, "rect", {
-            x: "150",
-            y: `${pipeGapY + pipeGapHeight / 2}`,
-            width: `${Constants.PIPE_WIDTH}`,
-            height: `${Viewport.CANVAS_HEIGHT - (pipeGapY + pipeGapHeight / 2)}`,
-            fill: "green",
-        });
+        for (const p of s.pipes) {
+            current.add(p.id);
+            let g = pipeNodes.get(p.id);
+            if (!g) {
+                g = document.createElementNS(namespace, "g") as SVGGElement;
+                const top = createSvgElement(svg.namespaceURI, "rect");
+                const bottom = createSvgElement(svg.namespaceURI, "rect");
+                g.appendChild(top);
+                g.appendChild(bottom);
+                pipeNodes.set(p.id, g);
+                svg.appendChild(g);
+            }
 
-        svg.appendChild(pipeTop);
-        svg.appendChild(pipeBottom);
+            const gapTop= GapTop(p);
+            const gapBottom= GapBottom(p);
+            const [top, bottom] =Array.from(g.children) as [SVGRectElement, SVGRectElement];
+
+            top.setAttribute("x", `${p.x}`);
+            top.setAttribute("y", `0`);
+            top.setAttribute("width", `${Constants.PIPE_WIDTH}`);
+            top.setAttribute("height", `${gapTop}`);
+            top.setAttribute("fill", "green");
+
+            bottom.setAttribute("x", `${p.x}`);
+            bottom.setAttribute("y", `${gapBottom}`);
+            bottom.setAttribute("width", `${Constants.PIPE_WIDTH}`);
+            bottom.setAttribute("height", `${Viewport.CANVAS_HEIGHT - gapBottom}`);
+            bottom.setAttribute("fill", "green");
+
+        };
+        for (const [id, node] of pipeNodes) {
+                if (!current.has(id)) {
+                    node.remove();
+                    pipeNodes.delete(id);
+                }
+            }
+
+            bringToForeground(birbImg);
     };
 };
 
 export const state$ = (csvContents: string): Observable<State> => {
     /** User input */
 
-    const key$ = fromEvent<KeyboardEvent>(document, "keypress");
-    const fromKey = (keyCode: Key) =>
-        key$.pipe(filter(({ code }) => code === keyCode));
+    const key$ = fromEvent<KeyboardEvent>(document, "keydown");
+    const lives = parseCSV(csvContents);
+    const initial = initialState(lives);
+
+    const flap$ = key$.pipe(
+        filter(e => e.code === "Space" && !e.repeat),
+        map((): Action => ({ type: "FLAP" }))
+    );
 
     /** Determines the rate of time steps */
-    const tick$ = interval(Constants.TICK_RATE_MS);
+    const tick$ = animationFrames().pipe(
+        map(({timestamp})=>timestamp),
+        pairwise(),
+        map(([t0, t1]) => ({type:"TICK", dt: Math.min(Constants.MAX_FRAMES, Math.max(0, t1-t0))}) as Action)
+    );
 
-    return tick$.pipe(scan((s: State) => ({ gameEnd: false }), initialState));
+    return merge(tick$, flap$).pipe(
+        scan(reduceState, initial),
+    );
 };
 
 // The following simply runs your main function on window load.  Make sure to leave it in place.
@@ -226,7 +406,7 @@ if (typeof window !== "undefined") {
     );
 
     // Observable: wait for first user click
-    const click$ = merge(
+    const start$ = merge(
         fromEvent(document.body, "mousedown"),
         fromEvent<KeyboardEvent>(document, "keydown").pipe(filter(e => e.code === "Space"))
     ).pipe(take(1));
@@ -234,7 +414,7 @@ if (typeof window !== "undefined") {
     csv$.pipe(
         switchMap(contents =>
             // On click - start the game
-            click$.pipe(switchMap(() => state$(contents))),
+            start$.pipe(switchMap(() => state$(contents))),
         ),
     ).subscribe(render());
 }

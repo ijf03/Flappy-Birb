@@ -39,6 +39,8 @@ const Birb = {
     HEIGHT: 30,
 } as const;
 
+const BIRB_X = Viewport.CANVAS_WIDTH*0.3 - Birb.WIDTH/2;
+
 const Constants = {
     PIPE_WIDTH: 50,
     TICK_RATE_MS: 500, // Might need to change this!
@@ -129,6 +131,20 @@ const render = (): ((s: State) => void) => {
         "viewBox",
         `0 0 ${Viewport.CANVAS_WIDTH} ${Viewport.CANVAS_HEIGHT}`,
     );
+    const namespace = svg.namespaceURI;
+
+    let birbImg = svg.querySelector("#birbImg") as SVGElement;
+    if (!birbImg) {
+        birbImg = createSvgElement(namespace, "image", {
+            id: "birbImg",
+            href: "assets/birb.png",
+            x: `${BIRB_X}`,
+            y: `${Viewport.CANVAS_HEIGHT / 2 - Birb.HEIGHT/2}`,
+            width: `${Birb.WIDTH}`,
+            height: `${Birb.HEIGHT}`,
+        }) as SVGElement;
+        svg.appendChild(birbImg);
+    }
     /**
      * Renders the current state to the canvas.
      *
@@ -210,7 +226,10 @@ if (typeof window !== "undefined") {
     );
 
     // Observable: wait for first user click
-    const click$ = fromEvent(document.body, "mousedown").pipe(take(1));
+    const click$ = merge(
+        fromEvent(document.body, "mousedown"),
+        fromEvent<KeyboardEvent>(document, "keydown").pipe(filter(e => e.code === "Space"))
+    ).pipe(take(1));
 
     csv$.pipe(
         switchMap(contents =>

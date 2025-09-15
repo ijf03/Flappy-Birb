@@ -99,6 +99,8 @@ type State = Readonly<{
     remainingLives: ReadonlyArray<Lives>;
     lives: number;
     lastHitTime: number;
+    score: number;
+    totalPipes: number;
 }>;
 
 const clamp =(
@@ -143,6 +145,8 @@ const initialState = (lives: Lives[]): State => {
         remainingLives:lives.slice(),
         lives: 3,
         lastHitTime: -Constants.COLLISION_COOLDOWN,
+        score: 0,
+        totalPipes: lives.length + 1,
     };
 };
 
@@ -241,6 +245,20 @@ function reduceState(s:State, a:Action): State{
                 Viewport.CANVAS_HEIGHT - Birb.HEIGHT
             );
 
+            let score = s.score;
+
+            pipes = pipes.map(p => {
+            if (!p.passed && BIRB_X > p.x + Constants.PIPE_WIDTH) {
+                const gapTop = GapTop(p);
+                const gapBot = GapBottom(p);
+                const insideGapNow = (y >= gapTop) && (y + Birb.HEIGHT <= gapBot);
+                if (insideGapNow) {
+                score += 1;
+                return { ...p, passed: true };
+                }
+            }
+            return p;
+            });
 
             let lives = s.lives;
             let lastHitTime = s.lastHitTime;
@@ -273,7 +291,8 @@ function reduceState(s:State, a:Action): State{
                 remainingLives: remaining,
                 lives,
                 lastHitTime,
-                gameEnd: lives === 0
+                score,
+                gameEnd: lives === 0 || (remaining.length === 0 && pipes.length === 0),
             };
         }
         default:
@@ -378,6 +397,22 @@ const render = (): ((s: State) => void) => {
         document.body.appendChild(livesText);
     }
 
+    let scoreText = document.getElementById("scoreText") as HTMLDivElement | null;
+    if (!scoreText) {
+    scoreText = document.createElement("div");
+    scoreText.id = "scoreText";
+    Object.assign(scoreText.style, {
+        position: "absolute",
+        right: "12px",
+        top: "8px",
+        color: "white",
+        font: "600 16px system-ui, sans-serif",
+        textShadow: "0 1px 2px rgba(0,0,0,.6)",
+    });
+    document.body.appendChild(scoreText);
+    }
+
+
     let gameOver = document.querySelector("#gameOver") as HTMLDivElement;
     if (!gameOver) {
         gameOver = document.createElement("div");
@@ -446,9 +481,10 @@ const render = (): ((s: State) => void) => {
                 }
             }
 
-            bringToForeground(birbImg);
-            livesText.textContent = `Lives: ${s.lives}`;
-            gameOver.style.display = s.gameEnd ? "flex" : "none";
+        bringToForeground(birbImg);
+        livesText.textContent = `Lives: ${s.lives}`;
+        gameOver.style.display = s.gameEnd ? "flex" : "none";
+        scoreText!.textContent = `Score: ${s.score}`;
     };
 };
 

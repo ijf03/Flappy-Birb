@@ -89,7 +89,7 @@ type Pipe = Readonly<{
     x: number;
     gapY: number;
     gapHeight: number;
-    passed: boolean; // pipe out of screen
+    passed: boolean;
 }>;
 
 type State = Readonly<{
@@ -503,10 +503,10 @@ const render = (): ((s: State) => void) => { //render game
         scoreText!.textContent = `${s.score}`; //update score text
 
         const gs = s.ghost;
-        if (gs.length === 0) {
+        if (gs.length === 0) {// no ghost
         ghostImage!.setAttribute("visibility", "hidden");
-        } else {
-        const i = gs.findIndex(g => g.t > s.time);
+        } else { // position ghost
+        const i = gs.findIndex(g => g.t > s.time); // first ghost point after current time
         if (i === -1) {
             // farther than last game
             ghostImage!.setAttribute("visibility", "hidden");
@@ -535,12 +535,12 @@ export const state$ = (csvContents: string): Observable<State> => { // main game
         map((): Action => ({ type: "FLAP" })) //calls flap action
     );
 
-    const restart$ = merge(
-        fromEvent(document, "mousedown"),
+    const restart$ = merge( //restart game
+        fromEvent(document, "mousedown"), // click to restart
         fromEvent<KeyboardEvent>(document, "keydown").pipe(filter(e => e.code === "Space")),
     ).pipe(map((): Action => ({ type: "RESTART" })));
 
-    const hashRand = (t: number) => {
+    const hashRand = (t: number) => { //random num gen
         // pure, deterministic in [0,1)
         const x = Math.sin(t * 0.001 *12.99) * 43758.5453;
         return x - Math.floor(x);

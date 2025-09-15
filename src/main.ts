@@ -69,10 +69,11 @@ type BirbState = Readonly <{
     vy: number;
 }>;
 
+// Ghost replay
 type Ghost=Readonly<{t:number; y: number}>;
-let LastGameRun: Ghost[] | null = null
+let LastGameRun: Ghost[] | null = null; //empty if no previous run
 
-type Collision = "TOP" | "BOTTOM" 
+type Collision = "TOP" | "BOTTOM" // null if no collision
 
 type Action =
     | {type:"FLAP"}
@@ -90,7 +91,7 @@ type Pipe = Readonly<{
     x: number;
     gapY: number;
     gapHeight: number;
-    passed: boolean;
+    passed: boolean; // pipe out of screen
 }>;
 
 type State = Readonly<{
@@ -112,8 +113,6 @@ const clamp =(
     high:number
 ) => Math.max(low, Math.min(high,x));
 
-const clamp02 = (x:number) => Math.max(0, Math.min(1,x));
-
 const GapTop = (p:Pipe) =>
     p.gapY*Viewport.CANVAS_HEIGHT - (p.gapHeight*Viewport.CANVAS_HEIGHT)/2;
 
@@ -128,13 +127,13 @@ const makeInitialBirb=(): BirbState=> ({
     vy:0,
 });
 
-const initialState = (lives: Lives[]): State => {
-    const seedGapY = lives[0]?.gapY ?? 0.5;
-    const seedGapHeight = lives[0]?.gapHeight ?? 0.25;
+const initialState = (lives: Lives[]): State => { // start game
+    const seedGapY = lives[0]?.gapY ?? 0.5; 
+    const seedGapHeight = lives[0]?.gapHeight ?? 0.25; 
 
-    const seed: Pipe = {
+    const seed: Pipe = { // first pipe
         id: 0,
-        x: Viewport.CANVAS_WIDTH - Constants.PIPE_WIDTH,
+        x: Viewport.CANVAS_WIDTH - Constants.PIPE_WIDTH, 
         gapY: seedGapY,
         gapHeight: seedGapHeight,
         passed: false,
@@ -146,26 +145,26 @@ const initialState = (lives: Lives[]): State => {
         birb: makeInitialBirb(),
         pipes: [seed],
         remainingLives:lives.slice(),
-        lives: 3,
-        totalLives: lives.slice(),
-        lastHitTime: -Constants.COLLISION_COOLDOWN,
+        lives: 3, // number of lives
+        totalLives: lives.slice(), 
+        lastHitTime: -Constants.COLLISION_COOLDOWN, // dont allow immediate collision
         score: 0,
-        totalPipes: lives.length + 1,
+        totalPipes: lives.length + 1, // +1 for the initial pipe
     };
 };
-
+// checks if the birb collides with pipes or boundaries
 function checkCollision(b:BirbState, pipes: ReadonlyArray<Pipe>): Collision | null {
     if (b.y <= Constants.MARGIN) return "TOP";
     if (b.y + Birb.HEIGHT >= Viewport.CANVAS_HEIGHT - Constants.MARGIN) return "BOTTOM";
 
-    for (const p of pipes) {
-        const axisX = BIRB_X + Birb.WIDTH > p.x && BIRB_X < p.x + Constants.PIPE_WIDTH;
-        if (axisX) {
-            const gapTop = GapTop(p);
-            const gapBottom = GapBottom(p);
-            const axisY = b.y > gapTop && b.y + Birb.HEIGHT < gapBottom;
-            if (!axisY) {
-                return b.y <= gapTop ? "TOP" : "BOTTOM";
+    for (const p of pipes) { // check each pipe
+        const axisX = BIRB_X + Birb.WIDTH > p.x && BIRB_X < p.x + Constants.PIPE_WIDTH; // if the birb is within the x range of the pipe
+        if (axisX) { // if within x range, check y range
+            const gapTop = GapTop(p); // top of pipe gap
+            const gapBottom = GapBottom(p); // bottom of gap
+            const axisY = b.y > gapTop && b.y + Birb.HEIGHT < gapBottom; // if birb is within gap
+            if (!axisY) { // if not within gap then collide
+                return b.y <= gapTop ? "TOP" : "BOTTOM"; // which part of the pipe did the birb hit
             }
         }
     }
@@ -180,50 +179,50 @@ function parseCSV (csv: string): Lives[] {
     const gapHeightIdx = header.findIndex(h => h === "gap_height");
     const timeIdx = header.findIndex(h => h === "time");
 
-    const toNum = (s:string, def:number) => {
+    const toNum = (s:string, def:number) => { //str to num
         const n = Number(s);
         return isNaN(n) ? def : n;
     };
 
-    const clamp02 = (x:number) => Math.max(0, Math.min(1,x));
+    const clamp02 = (x:number) => Math.max(0, Math.min(1,x)); //0 and 1
 
-    const lives = lines.map(line => {
-        const cols = line.split(",").map(s => s.trim());
-        const gapY = clamp02(toNum(cols[gapYIdx], 0.5));
-        const gapHeight = clamp02(toNum(cols[gapHeightIdx], 0.25));
-        const at = Math.max(0, Math.round(toNum(cols[timeIdx], 0)*1000));
-        return { at, gapY, gapHeight} as Lives;
+    const lives = lines.map(line => { // each line to a life
+        const cols = line.split(",").map(s => s.trim()); // split by comma and trim
+        const gapY = clamp02(toNum(cols[gapYIdx], 0.5)); // gap between 0 and 1, default 0.5
+        const gapHeight = clamp02(toNum(cols[gapHeightIdx], 0.25));// gap height 0.25
+        const at = Math.max(0, Math.round(toNum(cols[timeIdx], 0)*1000)); //time
+        return { at, gapY, gapHeight} as Lives; 
     });
 
-    return lives.sort((a,b) => a.at - b.at);
+    return lives.sort((a,b) => a.at - b.at); //sort by time
 }
 
-function reduceState(s:State, a:Action): State{
-    if (s.gameEnd) {
-        if (a.type === "RESTART") {
-            return initialState(s.totalLives as Lives[]);
+function reduceState(s:State, a:Action): State{ 
+    if (s.gameEnd) { //if the game is finished, stop
+        if (a.type === "RESTART") { // restart the game
+            return initialState(s.totalLives as Lives[]); //reset variables of the gme
         }
         return s;
     }
-    switch(a.type) {
-        case "FLAP": {
-            const velocityY=-Math.min(
-                Constants.FLAP_RATE,
-                Constants.MAX_UP
+    switch(a.type) { // used a switch statement to handle both flap and tick whichis the main actions
+        case "FLAP": { //bird flying
+            const velocityY=-Math.min( //up
+                Constants.FLAP_RATE, // flap rate
+                Constants.MAX_UP // max up speed
             );
             return{ ...s, birb: {...s.birb, vy:velocityY}}
         }
         case "TICK": {
-            const dt = clamp(a.dt, 0, Constants.MAX_FRAMES);
-            const time = s.time + dt;
+            const dt = clamp(a.dt, 0, Constants.MAX_FRAMES); //delta time
+            const time = s.time + dt; //time elapsed
 
-            let remaining = s.remainingLives.slice();
-            let pipes = s.pipes.slice();
+            let remaining = s.remainingLives.slice(); // remaining lives
+            let pipes = s.pipes.slice(); //pipes
 
-            while (remaining.length > 0 && time >= remaining[0].at) {
-                const sp = remaining[0];
-                remaining = remaining.slice(1);
-                pipes.push({
+            while (remaining.length > 0 && time >= remaining[0].at) { // add new pipe if time is right
+                const sp = remaining[0]; // spawn new pipe
+                remaining = remaining.slice(1); // remove from list of remaining lives
+                pipes.push({ //new pipe to screen
                     id: nextPipe(pipes),
                     x: Viewport.CANVAS_WIDTH,
                     gapY: sp.gapY,
@@ -232,60 +231,60 @@ function reduceState(s:State, a:Action): State{
                 });
             }
 
-            const sec = dt / 1000;
-            pipes = pipes
-                .map(
+            const sec = dt / 1000; //seconds
+            pipes = pipes //pipe movement
+                .map( // move each pipe to the left
                     p => ({
-                        ...p,
-                        x: p.x-Constants.PIPE_SPEED*sec
+                        ...p, // keep other properties the same
+                        x: p.x-Constants.PIPE_SPEED*sec // move left
                     })
                 )
-                .filter(p => p.x + Constants.PIPE_WIDTH>0);
+                .filter(p => p.x + Constants.PIPE_WIDTH>0); // remove pipes that are off screen
 
 
-            const vy_orig = s.birb.vy + Constants.GRAVITY_RATE*dt;
-            const vy = clamp(
+            const vy_orig = s.birb.vy + Constants.GRAVITY_RATE*dt;//gravity effect
+            const vy = clamp(// clamp the velocity of the birb
                 vy_orig,
                 -Constants.MAX_UP,
                 Constants.MAX_DOWN
             );
-            let y = clamp(
+            let y = clamp( //clamp the birb postion
                 s.birb.y + vy*dt,
                 0,
                 Viewport.CANVAS_HEIGHT - Birb.HEIGHT
             );
 
-            let score = s.score;
+            let score = s.score; //score logic setup
 
-            pipes = pipes.map(p => {
+            pipes = pipes.map(p => { //passed the pip ?
             if (!p.passed && BIRB_X > p.x + Constants.PIPE_WIDTH) {
-                const gapTop = GapTop(p);
-                const gapBot = GapBottom(p);
+                const gapTop = GapTop(p); // top of pipe gap
+                const gapBot = GapBottom(p); // bottom of gap
                 const insideGapNow = (y >= gapTop) && (y + Birb.HEIGHT <= gapBot);
-                if (insideGapNow) {
-                score += 1;
+                if (insideGapNow) { // if the birb is within the gap
+                score += 1; // increase score
                 return { ...p, passed: true };
                 }
             }
             return p;
             });
 
-            let lives = s.lives;
-            let lastHitTime = s.lastHitTime;
-            let velocityY = vy;
+            let lives = s.lives; // lives logic setup
+            let lastHitTime = s.lastHitTime; // last time hit
+            let velocityY = vy; //velocity
 
-            if (time - s.lastHitTime >= Constants.COLLISION_COOLDOWN) {
-                const hit = checkCollision({y, vy}, pipes);
-                if (hit) {
-                    lives = Math.max(0, s.lives - 1);
-                    lastHitTime = time;
+            if (time - s.lastHitTime >= Constants.COLLISION_COOLDOWN) { //coll cooldown
+                const hit = checkCollision({y, vy}, pipes); //check collision
+                if (hit) { //hit something then:
+                    lives = Math.max(0, s.lives - 1); //-life
+                    lastHitTime = time; //update last hit time
 
-                    const magnitude = Math.random() * (Constants.BOUNCE_MAX - Constants.BOUNCE_MIN) + Constants.BOUNCE_MIN;
-                    velocityY = hit === "TOP" ? +magnitude : -magnitude;
+                    const magnitude = Math.random() * (Constants.BOUNCE_MAX - Constants.BOUNCE_MIN) + Constants.BOUNCE_MIN; // random bounce
+                    velocityY = hit === "TOP" ? +magnitude : -magnitude; //bounce direction
 
-                    y = clamp(y, 1, Viewport.CANVAS_HEIGHT - Birb.HEIGHT - 1);
+                    y = clamp(y, 1, Viewport.CANVAS_HEIGHT - Birb.HEIGHT - 1); //keep birb in screen
 
-                    velocityY = clamp(
+                    velocityY = clamp( //clamp velocity after bounce
                         velocityY,
                         -Constants.MAX_UP,
                         Constants.MAX_DOWN
@@ -365,18 +364,18 @@ const createSvgElement = (
     return elem;
 };
 
-const render = (): ((s: State) => void) => {
+const render = (): ((s: State) => void) => { //render game
 
-    const svg = document.querySelector("#svgCanvas") as SVGSVGElement;
+    const svg = document.querySelector("#svgCanvas") as SVGSVGElement; //screen
 
-    svg.setAttribute(
+    svg.setAttribute( // set screen size
         "viewBox",
         `0 0 ${Viewport.CANVAS_WIDTH} ${Viewport.CANVAS_HEIGHT}`,
     );
-    const namespace = svg.namespaceURI;
+    const namespace = svg.namespaceURI; //svg namespace
 
-    let birbImg = svg.querySelector("#birbImg") as SVGElement;
-    if (!birbImg) {
+    let birbImg = svg.querySelector("#birbImg") as SVGElement; // birb image
+    if (!birbImg) { //make birb if not exist
         birbImg = createSvgElement(namespace, "image", {
             id: "birbImg",
             href: "assets/birb.png",
@@ -389,7 +388,7 @@ const render = (): ((s: State) => void) => {
     }
 
     let ghostImage = svg.querySelector("#ghostImage") as SVGImageElement | null;
-    if (!ghostImage) {
+    if (!ghostImage) { //make ghost
     ghostImage = createSvgElement(namespace, "image", {
         id: "ghostImage",
         href: "assets/birb.png",
@@ -399,7 +398,7 @@ const render = (): ((s: State) => void) => {
         height: `${Birb.HEIGHT}`,
     }) as SVGImageElement;
 
-    ghostImage.style.opacity = "0.30";
+    ghostImage.style.opacity = "0.30"; 
     ghostImage.style.filter = "grayscale(100%)";
     ghostImage.setAttribute("visibility", "hidden");
     svg.appendChild(ghostImage);
@@ -409,7 +408,7 @@ const render = (): ((s: State) => void) => {
 
 
     let livesText = document.querySelector("#livesText") as HTMLDivElement | null;
-    if (!livesText) {
+    if (!livesText) { //text for no of lives left
         livesText = document.createElement("div");
         livesText.id = "livesText";
         Object.assign(livesText.style, {
@@ -426,7 +425,7 @@ const render = (): ((s: State) => void) => {
     }
 
     let scoreText = document.getElementById("scoreText") as HTMLDivElement | null;
-    if (!scoreText) {
+    if (!scoreText) { //text for score
     scoreText = document.createElement("div");
     scoreText.id = "scoreText";
     Object.assign(scoreText.style, {
@@ -474,10 +473,10 @@ const render = (): ((s: State) => void) => {
 
         const current = new Set<number>();
 
-        for (const p of s.pipes) {
-            current.add(p.id);
-            let g = pipeNodes.get(p.id);
-            if (!g) {
+        for (const p of s.pipes) { // for each pipe in the state
+            current.add(p.id); // add to current set
+            let g = pipeNodes.get(p.id); // get the pipe node if it exists
+            if (!g) { //make new pipe node
                 g = document.createElementNS(namespace, "g") as SVGGElement;
                 const top = createSvgElement(svg.namespaceURI, "rect");
                 const bottom = createSvgElement(svg.namespaceURI, "rect");
@@ -504,84 +503,85 @@ const render = (): ((s: State) => void) => {
             bottom.setAttribute("fill", "green");
 
         };
-        for (const [id, node] of pipeNodes) {
+        for (const [id, node] of pipeNodes) { //remove old pipes
                 if (!current.has(id)) {
                     node.remove();
                     pipeNodes.delete(id);
                 }
             }
 
-        bringToForeground(birbImg);
-        livesText!.textContent = `Lives: ${s.lives}`;
-        if (s.gameEnd) {
-            gameOver!.style.display = "flex";
+        bringToForeground(birbImg); // birb always on top
+        livesText!.textContent = `${s.lives}`; //update lives text
+        if (s.gameEnd) { //game over text
+            gameOver!.style.display = "flex"; 
             gameOver!.textContent = "Game Over! Play again.";
-        } else{
+        } else{ // hide game over text
             gameOver!.style.display = "none";
         }
-        scoreText!.textContent = `Score: ${s.score}`;
+        scoreText!.textContent = `${s.score}`; //update score text
 
-        if (s.time ===0) ghostIdx=0;
-        if (LastGameRun && LastGameRun.length >0) {
-            while (ghostIdx +1 < LastGameRun.length && LastGameRun[ghostIdx +1].t <=s.time){
-                ghostIdx++;
-            }
+        if (s.time ===0) ghostIdx=0; //reset ghost index
+        if (LastGameRun && LastGameRun.length >0) { //show ghost if there is a previous run
+            const endTime = LastGameRun[LastGameRun.length -1].t; // end time of last run
 
-            if(ghostIdx < LastGameRun.length) {
-                const ghost = LastGameRun[ghostIdx].y;
-                ghostImage!.setAttribute("x", String(BIRB_X));
-                ghostImage!.setAttribute("y", String(ghost));
-                ghostImage!.setAttribute("visibility", "visible");
+            if (s.time <= endTime) { // only show ghost if within time
+                while (ghostIdx +1 < LastGameRun.length && LastGameRun[ghostIdx +1].t <= s.time) {
+                    ghostIdx++;
+                }
+                const ghost = LastGameRun[ghostIdx].y; // ghost y position
+                ghostImage!.setAttribute("x", String(BIRB_X)); // ghost x position
+                ghostImage!.setAttribute("y", String(ghost)); // ghost y position
+                ghostImage!.setAttribute("visibility", "visible"); // show ghost
             } else {
-                ghostImage!.setAttribute("visibility", "hidden");
+                ghostImage!.setAttribute("visibility", "hidden"); // hide ghost if time exceeded / ghost died
             }
         } else {
-            ghostImage!.setAttribute("visibility", "hidden");
+            ghostImage!.setAttribute("visibility", "hidden"); // hide ghost if no previous run
         }
     };
 };
 
-export const state$ = (csvContents: string): Observable<State> => {
+export const state$ = (csvContents: string): Observable<State> => { // main game observable
     /** User input */
 
     const key$ = fromEvent<KeyboardEvent>(document, "keydown");
     const lives = parseCSV(csvContents);
     const initial = initialState(lives);
 
-    let recorder: Ghost[] = [];
-    let saveRun = false;
+    let recorder: Ghost[] = []; // recorder for current run
+    let saveRun = false; //save run
 
-    const flap$ = key$.pipe(
+    const flap$ = key$.pipe( // when space is pressed
         filter(e => e.code === "Space" && !e.repeat),
-        map((): Action => ({ type: "FLAP" }))
+        map((): Action => ({ type: "FLAP" })) //calls flap action
     );
 
     const restart$ = fromEvent(document, "mousedown").pipe(
-        map((): Action => ({ type: "RESTART" }))
+        map((): Action => ({ type: "RESTART" })) //calls restart action
     );
 
     /** Determines the rate of time steps */
-    const tick$ = animationFrames().pipe(
-        map(({timestamp})=>timestamp),
-        pairwise(),
-        map(([t0, t1]) => ({type:"TICK", dt: Math.min(Constants.MAX_FRAMES, Math.max(0, t1-t0))}) as Action)
+    const tick$ = animationFrames().pipe( 
+        map(({timestamp})=>timestamp), //get timestamp
+        pairwise(), //get previous timestamp
+        map(([t0, t1]) => ({type:"TICK", dt: Math.min(Constants.MAX_FRAMES, Math.max(0, t1-t0))}) as Action) //calls tick action with delta time
     );
 
-    return merge(tick$, flap$, restart$).pipe(
-        scan(reduceState, initial),
+    return merge(tick$, flap$, restart$).pipe( //merge all actions
+        scan(reduceState, initial), //reduce state with each action
 
-        tap(s => {
-            if (s.time === 0 && !s.gameEnd) {
-                recorder = [];
-                saveRun = false;
+        tap(s => { // side effect to record the run
+            if (s.time === 0 && !s.gameEnd) { // new game started
+                recorder = []; //make new recorder
+                saveRun = false; // allow saving
             }
 
-            if (!s.gameEnd){
-                recorder.push({t: s.time, y: s.birb.y});
+            if (!s.gameEnd){ // record if game not ended
+                recorder.push({t: s.time, y: s.birb.y}); //add to recorder
 
-            } else if(!saveRun) {
-                LastGameRun = recorder.slice();
-                saveRun = true;
+            } else if(!saveRun) { // game ended, save the run once
+                LastGameRun = recorder.slice(); // save the run
+                saveRun = true; // prevent further saving
             }
         }),
     );

@@ -27,6 +27,7 @@ import {
     animationFrames,
     merge,
     pairwise,
+    takeWhile,
     pipe,
 } from "rxjs";
 import { fromFetch } from "rxjs/fetch";
@@ -53,6 +54,10 @@ const Constants = {
     MAX_DOWN: 0.55,
     MAX_FRAMES: 33,
     PIPE_SPEED: 120,
+    COLLISION_COOLDOWN: 500,
+    MARGIN: 5,
+    BOUNCE_MIN: 0.25,
+    BOUNCE_MAX: 0.75,
 } as const;
 
 // User input
@@ -65,6 +70,8 @@ type BirbState = Readonly <{
     y: number;
     vy: number;
 }>;
+
+type Collision = "TOP" | "BOTTOM" 
 
 type Action =
     | {type:"FLAP"}
@@ -90,6 +97,8 @@ type State = Readonly<{
     birb: BirbState;
     pipes: ReadonlyArray<Pipe>;
     remainingLives: ReadonlyArray<Lives>;
+    lives: number;
+    lastHitTime: number;
 }>;
 
 const clamp =(
@@ -132,8 +141,28 @@ const initialState = (lives: Lives[]): State => {
         birb: makeInitialBirb(),
         pipes: [seed],
         remainingLives:lives.slice(),
+        lives: 3,
+        lastHitTime: -Constants.COLLISION_COOLDOWN,
     };
 };
+
+function checkCollision(b:BirbState, pipes: ReadonlyArray<Pipe>): Collision | null {
+    if (b.y <= Constants.MARGIN) return "TOP";
+    if (b.y + Birb.HEIGHT >= Viewport.CANVAS_HEIGHT - Constants.MARGIN) return "BOTTOM";
+
+    for (const p of pipes) {
+        const axisX = BIRB_X + Birb.WIDTH > p.x && BIRB_X < p.x + Constants.PIPE_WIDTH;
+        if (axisX) {
+            const gapTop = GapTop(p);
+            const gapBottom = GapBottom(p);
+            const axisY = b.y > gapTop && b.y + Birb.HEIGHT < gapBottom;
+            if (!axisY) {
+                return b.y <= gapTop ? "TOP" : "BOTTOM";
+            }
+        }
+    }
+}
+
 function parseCSV (csv: string): Lives[] {
     const lines = csv.trim().split(/\r?\n/).filter(l => l.trim().length > 0);
     const headerLine = lines.shift() ?? "";
@@ -211,12 +240,42 @@ function reduceState(s:State, a:Action): State{
                 Viewport.CANVAS_HEIGHT - Birb.HEIGHT
             );
 
+
+            let lives = s.lives;
+            let lastHitTime = s.lastHitTime;
+            let velocityY = vy;
+
+            if (time - s.lastHitTime >= Constants.COLLISION_COOLDOWN) {
+                const hit = checkCollision({y, vy}, pipes);
+                if (hit) {
+                    lives = Math.max(0, s.lives - 1);
+                    lastHitTime = time;
+
+                    const magnitude = Math.random() * (Constants.BOUNCE_MAX - Constants.BOUNCE_MIN) + Constants.BOUNCE_MIN;
+                    velocityY = hit === "TOP" ? +magnitude : -magnitude;
+
+                    velocityY = clamp(
+                        velocityY,
+                        1, Viewport.CANVAS_HEIGHT - Birb.HEIGHT - 1
+                    );
+
+                    velocityY = clamp(
+                        velocityY,
+                        -Constants.MAX_UP,
+                        Constants.MAX_DOWN
+                    );
+                }
+            }
+
             return {
                 ...s,
                 time,
-                birb: { y, vy },
+                birb: { y, vy: velocityY },
                 pipes,
                 remainingLives: remaining,
+                lives,
+                lastHitTime,
+                gameEnd: lives === 0
             };
         }
         default:
@@ -303,6 +362,40 @@ const render = (): ((s: State) => void) => {
     }
 
     const pipeNodes = new Map<number, SVGGElement>();
+
+
+    let livesText = document.querySelector("#livesText") as SVGTextElement;
+    if (!livesText) {
+        livesText = document.createElement("div");
+        livesText.id = "livesText";
+        Object.assign(livesText.style, {
+            position: "absolute",
+            left: "10px",
+            top: "10px",
+            color: "white",
+            fontSize: "20px",
+            fontFamily: "Arial, sans-serif",
+            textShadow: "2px 2px 4px #000000",
+        });
+        document.body.appendChild(livesText);
+    }
+
+    let gameOver = document.querySelector("#gameOver") as HTMLDivElement;
+    if (!gameOver) {
+        gameOver = document.createElement("div");
+        gameOver.id = "gameOver";
+        gameOver.innerText = "Game Over! Refresh to play again.";
+        Object.assign(gameOver.style, {
+            position: "absolute",
+            justifyContent: "center",
+            alignItems: "center",
+            color: "red",
+            fontSize: "40px",
+            fontFamily: "Arial, sans-serif",
+        });
+        document.body.appendChild(gameOver);
+    }
+
     /**
      * Renders the current state to the canvas.
      *
@@ -356,6 +449,8 @@ const render = (): ((s: State) => void) => {
             }
 
             bringToForeground(birbImg);
+            livesText.textContent = `Lives: ${s.lives}`;
+            gameOver.style.display = s.gameEnd ? "flex" : "none";
     };
 };
 
@@ -380,6 +475,7 @@ export const state$ = (csvContents: string): Observable<State> => {
 
     return merge(tick$, flap$).pipe(
         scan(reduceState, initial),
+        takeWhile(s => !s.gameEnd, true) 
     );
 };
 

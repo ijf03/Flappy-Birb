@@ -71,13 +71,11 @@ type BirbState = Readonly <{
 
 // Ghost replay
 type Ghost=Readonly<{t:number; y: number}>;
-let LastGameRun: Ghost[] | null = null; //empty if no previous run
-
 type Collision = "TOP" | "BOTTOM" // null if no collision
 
 type Action =
     | {type:"FLAP"}
-    | {type:"TICK"; dt: number}
+    | {type:"TICK"; dt: number; rand: number}
     | {type:"RESTART"};
 
 type Lives = Readonly<{
@@ -105,6 +103,8 @@ type State = Readonly<{
     lastHitTime: number;
     score: number;
     totalPipes: number;
+    ghost: ReadonlyArray<Ghost>;
+    track: ReadonlyArray<Ghost>;
 }>;
 
 const clamp =(
@@ -150,8 +150,17 @@ const initialState = (lives: Lives[]): State => { // start game
         lastHitTime: -Constants.COLLISION_COOLDOWN, // dont allow immediate collision
         score: 0,
         totalPipes: lives.length + 1, // +1 for the initial pipe
+        ghost: [],
+        track: [],
     };
 };
+
+const restartState = (prev: State): State => { //restart
+  const ns = initialState(prev.totalLives as Lives[]);
+  return { ...ns, ghost: prev.ghost };
+};
+
+
 // checks if the birb collides with pipes or boundaries
 function checkCollision(b:BirbState, pipes: ReadonlyArray<Pipe>): Collision | null {
     if (b.y <= Constants.MARGIN) return "TOP";
@@ -199,10 +208,7 @@ function parseCSV (csv: string): Lives[] {
 
 function reduceState(s:State, a:Action): State{ 
     if (s.gameEnd) { //if the game is finished, stop
-        if (a.type === "RESTART") { // restart the game
-            return initialState(s.totalLives as Lives[]); //reset variables of the gme
-        }
-        return s;
+        return a.type === "RESTART" ? restartState(s) : s;
     }
     switch(a.type) { // used a switch statement to handle both flap and tick whichis the main actions
         case "FLAP": { //bird flying
@@ -279,7 +285,7 @@ function reduceState(s:State, a:Action): State{
                     lives = Math.max(0, s.lives - 1); //-life
                     lastHitTime = time; //update last hit time
 
-                    const magnitude = Math.random() * (Constants.BOUNCE_MAX - Constants.BOUNCE_MIN) + Constants.BOUNCE_MIN; // random bounce
+                    const magnitude = a.rand * (Constants.BOUNCE_MAX - Constants.BOUNCE_MIN) + Constants.BOUNCE_MIN; // random bounce
                     velocityY = hit === "TOP" ? +magnitude : -magnitude; //bounce direction
 
                     y = clamp(y, 1, Viewport.CANVAS_HEIGHT - Birb.HEIGHT - 1); //keep birb in screen
@@ -291,6 +297,9 @@ function reduceState(s:State, a:Action): State{
                     );
                 }
             }
+            const track = s.track.concat([{t: time, y}]); // add to track for ghost
+            const willEnd = lives ===0 || (remaining.length ===0 && pipes.length ===0);
+            const ghost = willEnd ? track : s.ghost; // if game will end, save the track as ghost
 
             return {
                 ...s,
@@ -301,22 +310,15 @@ function reduceState(s:State, a:Action): State{
                 lives,
                 lastHitTime,
                 score,
-                gameEnd: lives === 0 || (remaining.length === 0 && pipes.length === 0),
+                gameEnd: willEnd,
+                track: willEnd ? [] : track, // reset track if game will end
+                ghost, //last run
             };
         }
         default:
             return s;
     }
 }
-/**
- * Updates the state by proceeding with one time step.
- *
- * @param s Current state
- * @returns Updated state
- */
-const tick = (s: State) => s;
-
-// Rendering (side effects)
 
 /**
  * Brings an SVG element to the foreground.
@@ -324,23 +326,6 @@ const tick = (s: State) => s;
  */
 const bringToForeground = (elem: SVGElement): void => {
     elem.parentNode?.appendChild(elem);
-};
-
-/**
- * Displays a SVG element on the canvas. Brings to foreground.
- * @param elem SVG element to display
- */
-const show = (elem: SVGElement): void => {
-    elem.setAttribute("visibility", "visible");
-    bringToForeground(elem);
-};
-
-/**
- * Hides a SVG element on the canvas.
- * @param elem SVG element to hide
- */
-const hide = (elem: SVGElement): void => {
-    elem.setAttribute("visibility", "hidden");
 };
 
 /**
@@ -387,21 +372,21 @@ const render = (): ((s: State) => void) => { //render game
         svg.appendChild(birbImg);
     }
 
+    // ghost sprite (once)
     let ghostImage = svg.querySelector("#ghostImage") as SVGImageElement | null;
-    if (!ghostImage) { //make ghost
-    ghostImage = createSvgElement(namespace, "image", {
+    if (!ghostImage) {
+        ghostImage = createSvgElement(svg.namespaceURI, "image", {
         id: "ghostImage",
         href: "assets/birb.png",
-        x: `${BIRB_X}`,
-        y: `${Viewport.CANVAS_HEIGHT / 2 - Birb.HEIGHT / 2}`,
-        width: `${Birb.WIDTH}`,
-        height: `${Birb.HEIGHT}`,
-    }) as SVGImageElement;
-
-    ghostImage.style.opacity = "0.30"; 
-    ghostImage.style.filter = "grayscale(100%)";
-    ghostImage.setAttribute("visibility", "hidden");
-    svg.appendChild(ghostImage);
+        x: String(BIRB_X),
+        y: String(Viewport.CANVAS_HEIGHT / 2 - Birb.HEIGHT / 2),
+        width: String(Birb.WIDTH),
+        height: String(Birb.HEIGHT),
+        }) as SVGImageElement;
+        ghostImage.style.opacity = "0.35";
+        ghostImage.style.filter = "grayscale(100%)";
+        ghostImage.setAttribute("visibility", "hidden");
+        svg.appendChild(ghostImage);
     }
 
     const pipeNodes = new Map<number, SVGGElement>();
@@ -456,8 +441,6 @@ const render = (): ((s: State) => void) => { //render game
         document.body.appendChild(gameOver);
     }
 
-    let ghostIdx = 0;
-
     /**
      * Renders the current state to the canvas.
      *
@@ -510,7 +493,6 @@ const render = (): ((s: State) => void) => { //render game
                 }
             }
 
-        bringToForeground(birbImg); // birb always on top
         livesText!.textContent = `${s.lives}`; //update lives text
         if (s.gameEnd) { //game over text
             gameOver!.style.display = "flex"; 
@@ -520,24 +502,24 @@ const render = (): ((s: State) => void) => { //render game
         }
         scoreText!.textContent = `${s.score}`; //update score text
 
-        if (s.time ===0) ghostIdx=0; //reset ghost index
-        if (LastGameRun && LastGameRun.length >0) { //show ghost if there is a previous run
-            const endTime = LastGameRun[LastGameRun.length -1].t; // end time of last run
-
-            if (s.time <= endTime) { // only show ghost if within time
-                while (ghostIdx +1 < LastGameRun.length && LastGameRun[ghostIdx +1].t <= s.time) {
-                    ghostIdx++;
-                }
-                const ghost = LastGameRun[ghostIdx].y; // ghost y position
-                ghostImage!.setAttribute("x", String(BIRB_X)); // ghost x position
-                ghostImage!.setAttribute("y", String(ghost)); // ghost y position
-                ghostImage!.setAttribute("visibility", "visible"); // show ghost
-            } else {
-                ghostImage!.setAttribute("visibility", "hidden"); // hide ghost if time exceeded / ghost died
-            }
+        const gs = s.ghost;
+        if (gs.length === 0) {
+        ghostImage!.setAttribute("visibility", "hidden");
         } else {
-            ghostImage!.setAttribute("visibility", "hidden"); // hide ghost if no previous run
+        const i = gs.findIndex(g => g.t > s.time);
+        if (i === -1) {
+            // farther than last game
+            ghostImage!.setAttribute("visibility", "hidden");
+        } else {
+            const idx = Math.max(0, i - 1);
+            const gy = gs[idx].y;
+            ghostImage!.setAttribute("x", String(BIRB_X));
+            ghostImage!.setAttribute("y", String(gy));
+            ghostImage!.setAttribute("visibility", "visible");
         }
+        }
+        // keep bird above
+        bringToForeground(birbImg!);
     };
 };
 
@@ -548,42 +530,35 @@ export const state$ = (csvContents: string): Observable<State> => { // main game
     const lives = parseCSV(csvContents);
     const initial = initialState(lives);
 
-    let recorder: Ghost[] = []; // recorder for current run
-    let saveRun = false; //save run
-
     const flap$ = key$.pipe( // when space is pressed
         filter(e => e.code === "Space" && !e.repeat),
         map((): Action => ({ type: "FLAP" })) //calls flap action
     );
 
-    const restart$ = fromEvent(document, "mousedown").pipe(
-        map((): Action => ({ type: "RESTART" })) //calls restart action
-    );
+    const restart$ = merge(
+        fromEvent(document, "mousedown"),
+        fromEvent<KeyboardEvent>(document, "keydown").pipe(filter(e => e.code === "Space")),
+    ).pipe(map((): Action => ({ type: "RESTART" })));
+
+    const hashRand = (t: number) => {
+        // pure, deterministic in [0,1)
+        const x = Math.sin(t * 0.001 *12.99) * 43758.5453;
+        return x - Math.floor(x);
+    };
 
     /** Determines the rate of time steps */
     const tick$ = animationFrames().pipe( 
         map(({timestamp})=>timestamp), //get timestamp
         pairwise(), //get previous timestamp
-        map(([t0, t1]) => ({type:"TICK", dt: Math.min(Constants.MAX_FRAMES, Math.max(0, t1-t0))}) as Action) //calls tick action with delta time
+        map(([t0, t1]) => {
+            const dt = Math.min(Constants.MAX_FRAMES, Math.max(0, t1 - t0));
+            return { type: "TICK", dt, rand: hashRand(t1) } as Action;
+        })//map to tick action
+
     );
 
     return merge(tick$, flap$, restart$).pipe( //merge all actions
         scan(reduceState, initial), //reduce state with each action
-
-        tap(s => { // side effect to record the run
-            if (s.time === 0 && !s.gameEnd) { // new game started
-                recorder = []; //make new recorder
-                saveRun = false; // allow saving
-            }
-
-            if (!s.gameEnd){ // record if game not ended
-                recorder.push({t: s.time, y: s.birb.y}); //add to recorder
-
-            } else if(!saveRun) { // game ended, save the run once
-                LastGameRun = recorder.slice(); // save the run
-                saveRun = true; // prevent further saving
-            }
-        }),
     );
 };
 

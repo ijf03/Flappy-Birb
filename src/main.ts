@@ -26,6 +26,7 @@ import {
     animationFrames,
     merge,
     pairwise,
+    tap,
 } from "rxjs";
 import { fromFetch } from "rxjs/fetch";
 
@@ -67,6 +68,9 @@ type BirbState = Readonly <{
     y: number;
     vy: number;
 }>;
+
+type Ghost=Readonly<{t:number; y: number}>;
+let LastGameRun: Ghost[] | null = null
 
 type Collision = "TOP" | "BOTTOM" 
 
@@ -384,6 +388,23 @@ const render = (): ((s: State) => void) => {
         svg.appendChild(birbImg);
     }
 
+    let ghostImage = svg.querySelector("#ghostImage") as SVGImageElement | null;
+    if (!ghostImage) {
+    ghostImage = createSvgElement(namespace, "image", {
+        id: "ghostImage",
+        href: "assets/birb.png",
+        x: `${BIRB_X}`,
+        y: `${Viewport.CANVAS_HEIGHT / 2 - Birb.HEIGHT / 2}`,
+        width: `${Birb.WIDTH}`,
+        height: `${Birb.HEIGHT}`,
+    }) as SVGImageElement;
+
+    ghostImage.style.opacity = "0.30";
+    ghostImage.style.filter = "grayscale(100%)";
+    ghostImage.setAttribute("visibility", "hidden");
+    svg.appendChild(ghostImage);
+    }
+
     const pipeNodes = new Map<number, SVGGElement>();
 
 
@@ -435,6 +456,8 @@ const render = (): ((s: State) => void) => {
         });
         document.body.appendChild(gameOver);
     }
+
+    let ghostIdx = 0;
 
     /**
      * Renders the current state to the canvas.
@@ -489,7 +512,7 @@ const render = (): ((s: State) => void) => {
             }
 
         bringToForeground(birbImg);
-        livesText.textContent = `Lives: ${s.lives}`;
+        livesText!.textContent = `Lives: ${s.lives}`;
         if (s.gameEnd) {
             gameOver!.style.display = "flex";
             gameOver!.textContent = "Game Over! Play again.";
@@ -497,6 +520,24 @@ const render = (): ((s: State) => void) => {
             gameOver!.style.display = "none";
         }
         scoreText!.textContent = `Score: ${s.score}`;
+
+        if (s.time ===0) ghostIdx=0;
+        if (LastGameRun && LastGameRun.length >0) {
+            while (ghostIdx +1 < LastGameRun.length && LastGameRun[ghostIdx +1].t <=s.time){
+                ghostIdx++;
+            }
+
+            if(ghostIdx < LastGameRun.length) {
+                const ghost = LastGameRun[ghostIdx].y;
+                ghostImage!.setAttribute("x", String(BIRB_X));
+                ghostImage!.setAttribute("y", String(ghost));
+                ghostImage!.setAttribute("visibility", "visible");
+            } else {
+                ghostImage!.setAttribute("visibility", "hidden");
+            }
+        } else {
+            ghostImage!.setAttribute("visibility", "hidden");
+        }
     };
 };
 
@@ -506,6 +547,9 @@ export const state$ = (csvContents: string): Observable<State> => {
     const key$ = fromEvent<KeyboardEvent>(document, "keydown");
     const lives = parseCSV(csvContents);
     const initial = initialState(lives);
+
+    let recorder: Ghost[] = [];
+    let saveRun = false;
 
     const flap$ = key$.pipe(
         filter(e => e.code === "Space" && !e.repeat),
@@ -524,7 +568,22 @@ export const state$ = (csvContents: string): Observable<State> => {
     );
 
     return merge(tick$, flap$, restart$).pipe(
-        scan(reduceState, initial)
+        scan(reduceState, initial),
+
+        tap(s => {
+            if (s.time === 0 && !s.gameEnd) {
+                recorder = [];
+                saveRun = false;
+            }
+
+            if (!s.gameEnd){
+                recorder.push({t: s.time, y: s.birb.y});
+
+            } else if(!saveRun) {
+                LastGameRun = recorder.slice();
+                saveRun = true;
+            }
+        }),
     );
 };
 

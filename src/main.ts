@@ -54,9 +54,9 @@ const Constants = {
     MAX_DOWN: 0.55,
     MAX_FRAMES: 33,
     PIPE_SPEED: 120,
-    COLLISION_COOLDOWN: 500,
+    COLLISION_COOLDOWN: 800,
     MARGIN: 5,
-    BOUNCE_MIN: 0.25,
+    BOUNCE_MIN: 0.30,
     BOUNCE_MAX: 0.75,
 } as const;
 
@@ -76,6 +76,7 @@ type Collision = "TOP" | "BOTTOM"
 type Action =
     | {type:"FLAP"}
     | {type:"TICK"; dt: number}
+    | {type:"RESTART"};
 
 type Lives = Readonly<{
     at: number;
@@ -98,6 +99,7 @@ type State = Readonly<{
     pipes: ReadonlyArray<Pipe>;
     remainingLives: ReadonlyArray<Lives>;
     lives: number;
+    totalLives: ReadonlyArray<Lives>;
     lastHitTime: number;
     score: number;
     totalPipes: number;
@@ -144,6 +146,7 @@ const initialState = (lives: Lives[]): State => {
         pipes: [seed],
         remainingLives:lives.slice(),
         lives: 3,
+        totalLives: lives.slice(),
         lastHitTime: -Constants.COLLISION_COOLDOWN,
         score: 0,
         totalPipes: lives.length + 1,
@@ -195,6 +198,12 @@ function parseCSV (csv: string): Lives[] {
 }
 
 function reduceState(s:State, a:Action): State{
+    if (s.gameEnd) {
+        if (a.type === "RESTART") {
+            return initialState(s.totalLives as Lives[]);
+        }
+        return s;
+    }
     switch(a.type) {
         case "FLAP": {
             const velocityY=-Math.min(
@@ -483,7 +492,10 @@ const render = (): ((s: State) => void) => {
 
         bringToForeground(birbImg);
         livesText.textContent = `Lives: ${s.lives}`;
-        gameOver.style.display = s.gameEnd ? "flex" : "none";
+        if (s.gameEnd) {
+            gameOver!.style.display = "flex";
+            gameOver!.textContent = "Game Over! Play again.";
+        }
         scoreText!.textContent = `Score: ${s.score}`;
     };
 };
@@ -500,6 +512,10 @@ export const state$ = (csvContents: string): Observable<State> => {
         map((): Action => ({ type: "FLAP" }))
     );
 
+    const restart$ = fromEvent(document, "keydown").pipe(
+        map((): Action => ({ type: "RESTART" }))
+    );
+
     /** Determines the rate of time steps */
     const tick$ = animationFrames().pipe(
         map(({timestamp})=>timestamp),
@@ -507,9 +523,8 @@ export const state$ = (csvContents: string): Observable<State> => {
         map(([t0, t1]) => ({type:"TICK", dt: Math.min(Constants.MAX_FRAMES, Math.max(0, t1-t0))}) as Action)
     );
 
-    return merge(tick$, flap$).pipe(
-        scan(reduceState, initial),
-        takeWhile(s => !s.gameEnd, true) 
+    return merge(tick$, flap$, restart$).pipe(
+        scan(reduceState, initial)
     );
 };
 

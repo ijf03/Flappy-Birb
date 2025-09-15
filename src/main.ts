@@ -161,6 +161,7 @@ function checkCollision(b:BirbState, pipes: ReadonlyArray<Pipe>): Collision | nu
             }
         }
     }
+    return null;
 }
 
 function parseCSV (csv: string): Lives[] {
@@ -234,7 +235,7 @@ function reduceState(s:State, a:Action): State{
                 -Constants.MAX_UP,
                 Constants.MAX_DOWN
             );
-            const y = clamp(
+            let y = clamp(
                 s.birb.y + vy*dt,
                 0,
                 Viewport.CANVAS_HEIGHT - Birb.HEIGHT
@@ -254,10 +255,7 @@ function reduceState(s:State, a:Action): State{
                     const magnitude = Math.random() * (Constants.BOUNCE_MAX - Constants.BOUNCE_MIN) + Constants.BOUNCE_MIN;
                     velocityY = hit === "TOP" ? +magnitude : -magnitude;
 
-                    velocityY = clamp(
-                        velocityY,
-                        1, Viewport.CANVAS_HEIGHT - Birb.HEIGHT - 1
-                    );
+                    y = clamp(y, 1, Viewport.CANVAS_HEIGHT - Birb.HEIGHT - 1);
 
                     velocityY = clamp(
                         velocityY,
@@ -364,7 +362,7 @@ const render = (): ((s: State) => void) => {
     const pipeNodes = new Map<number, SVGGElement>();
 
 
-    let livesText = document.querySelector("#livesText") as SVGTextElement;
+    let livesText = document.querySelector("#livesText") as HTMLDivElement | null;
     if (!livesText) {
         livesText = document.createElement("div");
         livesText.id = "livesText";

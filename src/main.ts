@@ -19,7 +19,6 @@ import {
     catchError,
     filter,
     fromEvent,
-    interval,
     map,
     scan,
     switchMap,
@@ -27,8 +26,6 @@ import {
     animationFrames,
     merge,
     pairwise,
-    takeWhile,
-    pipe,
 } from "rxjs";
 import { fromFetch } from "rxjs/fetch";
 
@@ -402,6 +399,7 @@ const render = (): ((s: State) => void) => {
             fontSize: "20px",
             fontFamily: "Arial, sans-serif",
             textShadow: "2px 2px 4px #000000",
+            display: "none"
         });
         document.body.appendChild(livesText);
     }
@@ -495,6 +493,8 @@ const render = (): ((s: State) => void) => {
         if (s.gameEnd) {
             gameOver!.style.display = "flex";
             gameOver!.textContent = "Game Over! Play again.";
+        } else{
+            gameOver!.style.display = "none";
         }
         scoreText!.textContent = `Score: ${s.score}`;
     };
@@ -512,7 +512,7 @@ export const state$ = (csvContents: string): Observable<State> => {
         map((): Action => ({ type: "FLAP" }))
     );
 
-    const restart$ = fromEvent(document, "keydown").pipe(
+    const restart$ = fromEvent(document, "mousedown").pipe(
         map((): Action => ({ type: "RESTART" }))
     );
 
